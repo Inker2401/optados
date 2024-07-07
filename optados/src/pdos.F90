@@ -32,6 +32,7 @@ module od_pdos
   !-------------------------------------------------------------------------!
   use od_constants, only: dp
   use od_projection_utils, only: projection_array, matrix_weights, max_am, proj_symbol, num_proj, shortcut
+  use od_parameters, only : output_format
 
   implicit none
 
@@ -96,7 +97,7 @@ contains
     ! Write out the pdos that was requested. Write them all to the same file, unless
     ! we don't have a short cut. In this case, write 10 projectors per file.
     !===============================================================================
-    use od_io, only: seedname
+    use od_io, only: seedname, stdout
     implicit none
 
     character(len=20) :: start_iproj_name, end_iproj_name
@@ -120,6 +121,17 @@ contains
       ! write everything to one file
       name = trim(seedname)//'.pdos.dat'
       call write_proj_to_file(1, num_proj, name)
+
+      ! write a xmgrace file V Ravindran 2024
+      if (trim(output_format) == 'xmgrace') then
+         ! call write_pdos_xmgrace
+      else if (trim(output_format) == 'gnuplot') then
+         write(stdout,*) ' WARNING: GNUPLOT output not yet available for pdos, calling xmgrace'
+         ! call write_pdos_xmgrace
+      else
+         write(stdout,*) ' WARNING: Unknown output format requested for pdos, continuing...'
+      end if
+
     else ! not shortcut
       nfile = int(num_proj/10) + 1 ! Number of output files
       do ifile = 1, nfile
@@ -442,4 +454,141 @@ contains
 !!$    return
 !!$  end subroutine general_write_pdos
 
+  subroutine write_pdos_xmgrace(start_proj, stop_proj, pdos_name)
+    use od_dos_utils, only : E, dos_utils_set_efermi
+    use od_parameters, only : dos_nbins, set_efermi_zero, projectors_string
+    use od_algorithms, only : channel_to_am
+    use od_electronic, only : pdos_mwab, efermi, efermi_set
+    use od_cell, only : atoms_species_num, num_species
+    use od_io, only : io_file_unit, io_error, io_date
+    use xmgrace_utils
+    use od_io, only : stdout ! DEBUG
+
+    implicit none
+    integer, intent(in) :: start_proj, stop_proj
+    character(len=*), intent(in) :: pdos_name
+    character(len=20) :: string, legend_label
+    integer :: pdos_file, dataset_no
+    integer :: iproj, iam, ispecies_num, ispecies, ispin
+    integer :: ierr
+    real(kind=dp), allocatable :: E_shift(:)
+    real(kind=dp) :: plot_efermi
+    real(kind=dp) :: min_x, max_x, min_y, max_y
+
+    ! TODO sum and specific projectors
+    select case(trim(projectors_string))
+    case('species','species_ang','sites')
+       ! Fine nothing to do
+    case default
+       write(stdout,*) ' WARNING: xmgrace output for this PDOS projection is not currently implemented '
+       return
+    end select
+
+    ! Decide if we want to shift the energies or just write them without a shift
+    allocate (E_shift(dos_nbins), stat=ierr)
+    if (ierr /= 0) call io_error('Error allocating E_shift in write_proj_to_file')
+    if (set_efermi_zero) then
+       E_shift = E - efermi
+       plot_efermi = 0.0_dp
+    else
+       E_shift = E
+       plot_efermi = efermi
+    end if
+
+    ! Set format string based on number of projectors
+    write (string, '(I4,"(1x,es14.7)")') (stop_proj - start_proj) + 1
+
+    ! Now let's open the file and get ready to tango...
+    pdos_file = io_file_unit()
+    open (unit=pdos_file, file=trim(pdos_name), iostat=ierr)
+    if (ierr /= 0) call io_error(' ERROR: Cannot open output file in pdos: write_pdos_xmgrace')
+
+    ! Get the axis limits for the plot
+    max_x = maxval(E_shift)
+    min_x = minval(E_shift)
+    max_y = maxval(dos_partial)
+    min_y = 0.0_dp
+    if (pdos_mwab%nspins > 1) min_y = -max_y
+
+    ! Write out the usual xmgrace bits that we need
+    call xmgu_setup(pdos_file)
+    call xmgu_legend(pdos_file)
+    call xmgu_title(pdos_file, min_x, max_x, min_y, max_y, 'Electronic Partial Density of States')
+    call xmgu_axis(pdos_file,'x','Energy (eV)')
+    call xmgu_axis(pdos_file,'y','PDOS')
+
+    if (set_efermi_zero) then
+       call xmgu_vertical_line(pdos_file,plot_efermi, max_y, min_y)
+    end if
+
+    ! Now this is where the fun begins...
+    ! Loop around all projectors, atoms (species and species number), angular momentum and spins
+    ! and write the data headers including the labels for the legend.
+    do ispin = 1, pdos_mwab%nspins
+       do iproj = start_proj, stop_proj
+          ! Set the data set number noting that with two spins, it is double the number of projectors
+          dataset_no = iproj
+          if (ispin == 2) dataset_no = iproj + num_proj
+
+          do ispecies = 1, num_species
+             do ispecies_num = 1, atoms_species_num(ispecies)
+                do iam = 1, max_am
+                   ! The legend label will depend on how the user decided to perform the PDOS
+                   ! For instance, there is no need to label by angular momentum if the user
+                   ! just wanted it be species...
+                   ! This assumes all the book-keeping up to this point has been correct!
+                   if (trim(projectors_string)=='species') then
+                      if (pdos_mwab%nspins == 2) then
+                         if (ispin == 1) then
+                            legend_label = trim(proj_symbol(ispecies))//' (up)'
+                         else
+                            legend_label = trim(proj_symbol(ispecies))//' (down)'
+                         end if
+                      else
+                         legend_label = trim(proj_symbol(ispecies))
+                      end if
+                   else if (trim(projectors_string)=='species_ang') then
+                      if (pdos_mwab%nspins == 2) then
+                         if (ispin == 1) then
+                            legend_label = trim(proj_symbol(ispecies))//' (\q'//channel_to_am(iam)//'\Q) (up)'
+                         else
+                            legend_label = trim(proj_symbol(ispecies))//' (\q'//channel_to_am(iam)//'\Q) (down)'
+                         end if
+                      else
+                         legend_label = trim(proj_symbol(ispecies))//' (\q'//channel_to_am(iam)//'\Q)'
+                      end if
+                   else if (trim(projectors_string)=='sites') then
+                      if (pdos_mwab%nspins == 2) then
+                         if (ispin == 1) then
+                            write(legend_label,'(A3,I0,"( \q",A1,"(\Q) (up)")') &
+                                 proj_symbol(ispecies), ispecies_num, channel_to_am(iam)
+                         else
+                            write(legend_label,'(A3,I0,"( \q",A1,"(\Q) (down)")') &
+                                 proj_symbol(ispecies), ispecies_num, channel_to_am(iam)
+                         end if
+                      else
+                         write(legend_label,'(A3,I0,"( \q",A1,"(\Q)")') &
+                                 proj_symbol(ispecies), ispecies_num, channel_to_am(iam)
+                      end if
+                   end if
+             end do ! iam
+          end do ! ispecies_num
+       end do ! ispecies
+    end do ! ispin
+
+       ! TODO Only 15 colours have been set in xmgrace
+       call xmgu_data_header(pdos_file, dataset_no-1, mod(dataset_no,15), trim(legend_label))
+    end do ! iproj
+
+    ! Now let's write the actual pdos values
+    do ispin = 1, pdos_mwab%nspins
+       do iproj = 1, dos_nbins
+          dataset_no = iproj
+          if (ispin == 2) dataset_no = iproj + num_proj
+          call xmgu_data(pdos_file, dataset_no, E_shift(:), dos_partial(:, ispin, iproj))
+       end do
+    end do
+    ! Well that was fun...
+    close(pdos_file)
+  end subroutine write_pdos_xmgrace
 end module od_pdos
