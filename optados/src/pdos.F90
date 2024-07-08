@@ -582,7 +582,7 @@ contains
           end do ! ispecies
           ! Write the header for this dataset
           ! V Ravindran: only 15 colours appear to be set for Grace, do we want more?
-          write(*,'("Dataset ",I3," has label: ", A)') dataset_no, trim(legend_label)
+          ! write(*,'("Dataset ",I3," has label: ", A)') dataset_no, trim(legend_label)
           call xmgu_data_header(pdos_file, dataset_no-1, mod(dataset_no,15), trim(legend_label))
        end do ! iproj
     end do  ! ispin
