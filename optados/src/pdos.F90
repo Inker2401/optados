@@ -464,7 +464,7 @@ contains
     use od_dos_utils, only : E, dos_utils_set_efermi
     use od_parameters, only : dos_nbins, set_efermi_zero, projectors_string
     use od_algorithms, only : channel_to_am
-    use od_electronic, only : pdos_mwab, efermi, efermi_set
+    use od_electronic, only : pdos_mwab, efermi
     use od_cell, only : atoms_species_num, num_species
     use od_io, only : io_file_unit, io_error, io_date, stdout
     use xmgrace_utils
@@ -472,7 +472,7 @@ contains
     implicit none
     integer, intent(in) :: start_proj, stop_proj
     character(len=*), intent(in) :: pdos_name
-    character(len=20) :: string, legend_label
+    character(len=20) :: legend_label
     integer :: pdos_file, dataset_no
     integer :: iproj, iam, ispecies_num, ispecies, ispin
     integer :: ierr
@@ -500,9 +500,6 @@ contains
        plot_efermi = efermi
     end if
 
-    ! Set format string based on number of projectors
-    write (string, '(I4,"(1x,es14.7)")') (stop_proj - start_proj) + 1
-
     ! Now let's open the file and get ready to tango...
     pdos_file = io_file_unit()
     open (unit=pdos_file, file=trim(pdos_name), iostat=ierr)
@@ -528,10 +525,10 @@ contains
     end if
 
     ! Now this is where the fun begins...
-    ! We need to loop around spin projectors, atoms (species and species_num) and angular momentum
-    ! and assign the appropriate legend based on how we conducted the pdos.
+    ! We need to loop around spin projectors, atoms (species and species_num) and angular momentum channels
+    ! and assign the appropriate legend labels based on how we conducted the pdos.
     do ispin = 1, pdos_mwab%nspins
-       do iproj = 1, num_proj
+       do iproj = start_proj, stop_proj
           dataset_no = iproj + (ispin - 1) * num_proj
 
           ! Some of these loops are redundant as we for instance don't need to loop over angular momentum channels
@@ -593,7 +590,7 @@ contains
     ! Now let's write the actual pdos values
     ! NB dos_partial should already be fliped if spin polarised calculation by write_proj_to_file
     do ispin = 1, pdos_mwab%nspins
-       do iproj = 1, num_proj
+       do iproj = start_proj, stop_proj
           dataset_no = iproj + (ispin - 1) * num_proj
           call xmgu_data(pdos_file, dataset_no-1, E_shift(:), dos_partial(:, ispin, iproj))
        end do
