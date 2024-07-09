@@ -98,7 +98,7 @@ contains
     ! we don't have a short cut. In this case, write 10 projectors per file.
     !===============================================================================
     use od_io, only: seedname, stdout
-    use od_parameters, only : devel_flag ! TODO Remove_IMPORT
+    use od_parameters, only : devel_flag
     implicit none
 
     character(len=20) :: start_iproj_name, end_iproj_name
@@ -123,17 +123,15 @@ contains
       name = trim(seedname)//'.pdos.dat'
       call write_proj_to_file(1, num_proj, name)
 
-      ! write a xmgrace file V Ravindran 2024
-      if (index(devel_flag,'pdos_write_grace')>0) then
-         name = trim(seedname)//'.pdos.agr'
-         if (trim(output_format) == 'xmgrace') then
-            call write_pdos_xmgrace(1, num_proj, name)
-         else if (trim(output_format) == 'gnuplot') then
-            write(stdout,*) ' WARNING: GNUPLOT output not yet available for pdos, calling xmgrace'
-            call write_pdos_xmgrace(1, num_proj, name)
-         else
-            write(stdout,*) ' WARNING: Unknown output format requested for pdos, continuing...'
-         end if
+      ! write a xmgrace file V Ravindran 07/07/2024
+      name = trim(seedname)//'.pdos.agr'
+      if (trim(output_format) == 'xmgrace') then
+         call write_pdos_xmgrace(1, num_proj, name)
+      else if (trim(output_format) == 'gnuplot') then
+         write(stdout,*) ' WARNING: GNUPLOT output not yet available for pdos, calling xmgrace'
+         call write_pdos_xmgrace(1, num_proj, name)
+      else
+         write(stdout,*) ' WARNING: Unknown output format requested for pdos, continuing...'
       end if
 
     else ! not shortcut
@@ -150,6 +148,21 @@ contains
         write (end_iproj_name, '(I20.4)') end_iproj
         name = trim(seedname)//'.pdos.proj-'//trim(adjustl(start_iproj_name))//'-'//trim(adjustl(end_iproj_name))//'.dat'
         call write_proj_to_file(start_iproj, end_iproj, name)
+
+        ! write a xmgrace file V Ravindran 07/07/2024
+        if (index(devel_flag, 'pdos_write_grace') > 0) then
+           if (ifile == 1) write(stdout,*) ' WARNING: xmgrace output for pdos with hand-selected projectors is experimental '
+           name = trim(seedname)//'.pdos.proj-'//trim(adjustl(start_iproj_name))//'-'//trim(adjustl(end_iproj_name))//'.agr'
+           if (trim(output_format) == 'xmgrace') then
+              call write_pdos_xmgrace(start_iproj, end_iproj, name)
+           else if (trim(output_format) == 'gnuplot') then
+              if (ifile==1) write(stdout,*) ' WARNING: GNUPLOT output not yet available for pdos, calling xmgrace'
+              call write_pdos_xmgrace(start_iproj, end_iproj, name)
+           else
+              if (ifile==1) write(stdout,*) ' WARNING: Unknown output format requested for pdos, continuing...'
+           end if
+        end if
+
       end do
     end if
   end subroutine pdos_write
@@ -459,7 +472,13 @@ contains
 !!$  end subroutine general_write_pdos
 
   subroutine write_pdos_xmgrace(start_proj, stop_proj, pdos_name)
-    ! TODO Documentation
+    !======================================================================
+    ! Write out the PDOS to a GRACE batch file
+    ! This routine requires pdos_write_proj_to_file be called first
+    ! in order to 'flip' the PDOS for down spins for plotting.
+    !
+    ! V Ravindran : This routine is intended for use with the
+    !======================================================================
     use od_projection_utils, only : projection_array
     use od_dos_utils, only : E, dos_utils_set_efermi
     use od_parameters, only : dos_nbins, set_efermi_zero, projectors_string
@@ -479,15 +498,6 @@ contains
     real(kind=dp), allocatable :: E_shift(:)
     real(kind=dp) :: plot_efermi
     real(kind=dp) :: min_x, max_x, min_y, max_y
-
-    ! TODO sum and specific projectors
-    select case(trim(projectors_string))
-    case('species', 'species_ang', 'sites')
-       ! Fine nothing to do
-    case default
-       write(stdout,*) ' WARNING: xmgrace output for this PDOS projection is not currently implemented '
-       return
-    end select
 
     ! Decide if we want to shift the energies or just write them without a shift
     allocate (E_shift(dos_nbins), stat=ierr)
@@ -574,6 +584,20 @@ contains
                          else
                             write(legend_label,'(A3,I0)') &
                                     proj_symbol(ispecies), ispecies_num
+                         end if
+                      case default
+                         ! Doing projectors by hand so just output everything - book-keeping is possibly going to be messed up here...
+                         if (pdos_mwab%nspins == 2) then
+                            if (ispin == 1) then
+                               write(legend_label, '(A3,I0,"(\q",A1,"\Q)",1X,A)') proj_symbol(ispecies), ispecies_num, &
+                                    channel_to_am(iam), '(up)'
+                            else
+                               write(legend_label, '(A3,I0,"(\q",A1,"\Q)",1X,A)') proj_symbol(ispecies), ispecies_num, &
+                                    channel_to_am(iam), '(down)'
+                            end if
+                         else
+                            write(legend_label, '(A3,I0,"(\q",A1,"\Q)")') proj_symbol(ispecies), ispecies_num, &
+                                    channel_to_am(iam)
                          end if
                       end select
                    end if
