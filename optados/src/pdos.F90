@@ -477,15 +477,18 @@ contains
     ! This routine requires pdos_write_proj_to_file be called first
     ! in order to 'flip' the PDOS for down spins for plotting.
     !
-    ! V Ravindran : This routine is intended for use with the
+    ! V Ravindran : This routine is intended for use primarily with
+    ! 'SPECIES', 'SPECIES_ANG' or 'SITES' projection
+    ! Hand-selected projectors do work but the labels may be off and need
+    ! to be manually adjusted.
     !======================================================================
     use od_projection_utils, only : projection_array
     use od_dos_utils, only : E, dos_utils_set_efermi
     use od_parameters, only : dos_nbins, set_efermi_zero, projectors_string
     use od_algorithms, only : channel_to_am
-    use od_electronic, only : pdos_mwab, efermi
+    use od_electronic, only : pdos_mwab, efermi, efermi_set
     use od_cell, only : atoms_species_num, num_species
-    use od_io, only : io_file_unit, io_error, io_date, stdout
+    use od_io, only : io_file_unit, io_error, io_date
     use xmgrace_utils
 
     implicit none
@@ -498,6 +501,8 @@ contains
     real(kind=dp), allocatable :: E_shift(:)
     real(kind=dp) :: plot_efermi
     real(kind=dp) :: min_x, max_x, min_y, max_y
+
+    if (.not. efermi_set) call dos_utils_set_efermi
 
     ! Decide if we want to shift the energies or just write them without a shift
     allocate (E_shift(dos_nbins), stat=ierr)
@@ -530,9 +535,7 @@ contains
     call xmgu_axis(pdos_file,'x','Energy (eV)')
     call xmgu_axis(pdos_file,'y','PDOS')
 
-    if (set_efermi_zero) then
-       call xmgu_vertical_line(pdos_file,plot_efermi, max_y, min_y)
-    end if
+    call xmgu_vertical_line(pdos_file,plot_efermi, max_y, min_y)
 
     ! Now this is where the fun begins...
     ! We need to loop around spin projectors, atoms (species and species_num) and angular momentum channels
