@@ -1,5 +1,5 @@
 repos:
-- repo: github.com/pseewald/fprettify
+- repo: git@github.com/pseewald/fprettify
   rev: v0.3.3
   hooks:
   - id: fprettify
