@@ -47,6 +47,17 @@ module od_projection_utils
 
   integer, public, parameter :: max_am = 4                   ! s,p,d,f  hard coded!
 
+  ! Suborbitals
+  logical, public, save :: projection_do_suborbs = .false.
+  integer, public, parameter :: max_suborbs = 16
+  character(len=9), parameter :: suborb_labels(max_suborbs) = ['S        ', &
+                                                               'Px       ', 'Py       ', 'Pz       ', &
+                                                               'Dzz      ', 'Dzy      ', 'Dzx      ', 'Dxx-yy   ', 'Dxy      ', &
+                                                               'Fxxx     ', 'Fyyy     ', 'Fzzz     ', 'Fxyz     ', &
+                                                               'Fz(xx-yy)', 'Fy(zz-xx)', 'Fx(yy-zz)']
+
+  integer, public, allocatable :: proj_suborb(:, :) ! suborbitals for (num_species, max_suborbs)
+
   ! Data derived from the info in the pdos_weights file
   character(len=3), public, allocatable :: proj_symbol(:)   ! symbols
   integer, public, allocatable :: proj_am(:, :)              ! angular mtm (num_species,max_am)
@@ -57,6 +68,7 @@ module od_projection_utils
   private
 
   public :: projection_merge, projection_get_string, projection_analyse_orbitals
+  public :: projection_get_suborbitals
 
 contains
 
@@ -502,4 +514,120 @@ contains
 
   end subroutine projection_analyse_orbitals
 
+  subroutine projection_get_suborbitals
+    ! TODO Documentation
+    use od_cell, only: num_species, atoms_species_num, num_kpoints_on_node
+    use od_electronic, only: pdos_mwab, pdos_orbital, pdos_weights, nspins
+    use od_io, only: stdout, io_error
+    use od_comms, only: my_node_id
+
+    implicit none
+
+    ! no of suborbitals for given angular momentum l, 2l+1
+    integer, dimension(max_am), parameter :: nsuborbs = [1, 3, 5, 7]
+    ! starting index in suborb_labels for given angular momentum l
+    integer, dimension(max_am), parameter :: suborb_indx = [1, 2, 5, 10]
+    ! suborbital for each orbital from calculation
+    integer, dimension(:), allocatable :: orbital_lm
+
+    integer :: am_indx, end_indx
+    integer :: loop_s, loop_orb, loop_p, loop_m
+    integer :: ns, nk, nb
+    integer :: ierr
+
+    logical, parameter :: proj_suborb_debug = .true.
+
+    ! We need to also work out what suborbitals we have if requested
+    ! CASTEP will actually write all the orbitals including suborbitals
+    ! but will not label them so we have to deduce this for ourselves.
+    allocate (proj_suborb(maxval(pdos_orbital%species_no(:)), max_suborbs), stat=ierr)
+    if (ierr /= 0) call io_error('Error: projection_analyse_substring - allocation of proj_suborb failed')
+    allocate (orbital_lm(pdos_mwab%norbitals), stat=ierr)
+    if (ierr /= 0) call io_error('Error: projection_analyse_substring - allocation of orbital_lm failed')
+
+    proj_suborb = 0; loop_orb = 1
+    do
+      am_indx = suborb_indx(pdos_orbital%am_channel(loop_orb) + 1)
+      end_indx = am_indx + nsuborbs(am_indx) - 1
+
+      ! Determine the suborbital projectors that we have in this system
+      proj_suborb(pdos_orbital%species_no(loop_orb), am_indx:end_indx) = 1
+
+      ! Might as well figure out which suborbital corresponds to this orbital
+      orbital_lm(loop_orb:loop_orb + nsuborbs(am_indx) - 1) = (/(loop_m, loop_m=am_indx, end_indx, 1)/)
+
+      ! Advanced orbitals loop by number of suborbitals for given angular momentum l
+      loop_orb = loop_orb + nsuborbs(am_indx)
+      if (loop_orb >= pdos_mwab%norbitals) exit
+    end do
+
+    ! Initialise the projection array
+    ! For sub-orbital projection, we do projectors for all suborbitals,
+    ! i.e. all m quantum numbers at a given l rather than adding them up.
+    ! For now this is hard-coded to project per by species and suborbital.
+    ! TODO Allow distribution by site
+    num_proj = 0
+    do loop_s = 1, num_species
+      num_proj = num_proj + count(proj_suborb(loop_s, :) == 1)
+    end do
+
+    allocate (projection_array(num_species, maxval(atoms_species_num), max_suborbs, num_proj), stat=ierr)
+    if (ierr /= 0) call io_error('Error: projection_get_suborbitals - allocation of projection_array failed')
+
+    projection_array = 0; loop_p = 1
+    do loop_s = 1, num_species
+      do loop_orb = 1, max_suborbs
+        if (proj_suborb(loop_s, loop_orb) == 0) cycle
+        projection_array(loop_s, :, loop_orb, loop_p) = 1
+        loop_p = loop_p + 1
+      end do
+    end do
+
+    ! Place the weights in the matrix_weights array according to the desired projectors for each sub-orbital
+    allocate (matrix_weights(num_proj, pdos_mwab%nbands, num_kpoints_on_node(my_node_id), nspins), stat=ierr)
+    if (ierr /= 0) call io_error('Error: projection_get_suborbitals - allocation of matrix_weights failed')
+
+    matrix_weights = 0.0_dp
+    do nk = 1, num_kpoints_on_node(my_node_id)
+      do ns = 1, nspins
+        do nb = 1, pdos_mwab%nbands
+          do loop_p = 1, num_proj
+            do loop_orb = 1, pdos_mwab%norbitals
+              if (projection_array(pdos_orbital%species_no(loop_orb), pdos_orbital%rank_in_species(loop_orb), &
+                                   pdos_orbital%am_channel(loop_orb) + 1, loop_p) == 1) then
+                matrix_weights(loop_p, nb, nk, ns) = matrix_weights(loop_p, nb, nk, ns) + &
+                                                     pdos_weights(loop_orb, nb, nk, ns)
+              end if
+            end do
+          end do ! loop_p projectors
+        end do ! nb bands
+      end do ! ns spins
+    end do ! nk kpoints
+
+    if (proj_suborb_debug) then
+      write (stdout, *) ' ***** F U L L _ D E B U G _ P R O J _ S U B O R B *****  '
+      write (stdout, *) ' Number of k-points ', sum(num_kpoints_on_node(:))
+      write (stdout, *) ' Number of spins ', nspins
+      write (stdout, *) ' Number of bands ', pdos_mwab%norbitals
+      write (stdout, *) ' '
+      write (stdout, *) ' Number of total orbitals  ', pdos_mwab%norbitals
+      write (stdout, *) ' Number of species  ', num_species
+      write (stdout, *) ' Suborbital projectors (species,max_suborb) ', shape(proj_suborb)
+      write (stdout, *) ' Number of projectors requested ', num_proj
+      do loop_s = 1, num_species
+        write (stdout, *) ' proj_suborb for species ', loop_s, ': ', trim(proj_symbol(loop_s)), ' are ', &
+          pack(suborb_labels, proj_suborb(loop_s, :) == 1)
+      end do
+      write (stdout, *) ' '
+      do loop_orb = 1, pdos_mwab%norbitals
+        write (stdout, *) ' Orbital ', loop_orb, ' has ang. momentum l, suborb= ', &
+          pdos_orbital%am_channel(loop_orb), suborb_labels(orbital_lm(loop_orb))
+      end do
+      write (stdout, *) '  **** ***** *****  ***** ***** *****  ***** ***** *****  '
+    end if
+
+    deallocate (orbital_lm, stat=ierr)
+    if (ierr /= 0) call io_error('Error: projection_analyse_substring - deallocation of orbital_lm failed')
+
+  end subroutine projection_get_suborbitals
 end module od_projection_utils

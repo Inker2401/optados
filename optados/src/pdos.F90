@@ -48,19 +48,30 @@ contains
   subroutine pdos_calculate
     use od_electronic, only: elec_pdos_read, efermi, efermi_set
     use od_dos_utils, only: dos_utils_calculate, dos_utils_set_efermi
-    use od_projection_utils, only: projection_merge, projection_get_string, projection_analyse_orbitals
+    use od_projection_utils, only: projection_merge, projection_get_string, projection_analyse_orbitals, &
+      projection_get_suborbitals, projection_do_suborbs
     use od_comms, only: on_root
-    use od_parameters, only: iprint, set_efermi_zero
+    use od_parameters, only: iprint, set_efermi_zero, devel_flag
     use od_io, only: stdout
 
     implicit none
 
+    projection_do_suborbs = index(devel_flag, 'pdos_suborbs') > 0
+
     if (on_root) then
-      write (stdout, *)
-      write (stdout, '(1x,a78)') '+============================================================================+'
-      write (stdout, '(1x,a78)') '+                 Projected Density Of States Calculation                    +'
-      write (stdout, '(1x,a78)') '+============================================================================+'
-      write (stdout, '(1x,a78)')
+      if (projection_do_suborbs) then
+        write (stdout, *)
+        write (stdout, '(1x,a78)') '+============================================================================+'
+        write (stdout, '(1x,a78)') '+         Projected Density Of States Calculation  (all sub-orbitals)        +'
+        write (stdout, '(1x,a78)') '+============================================================================+'
+        write (stdout, '(1x,a78)')
+      else
+        write (stdout, *)
+        write (stdout, '(1x,a78)') '+============================================================================+'
+        write (stdout, '(1x,a78)') '+                 Projected Density Of States Calculation                    +'
+        write (stdout, '(1x,a78)') '+============================================================================+'
+        write (stdout, '(1x,a78)')
+      end if
     end if
 
     ! read in the pdos weights
@@ -69,8 +80,14 @@ contains
     ! look at the orbitals and figure out which atoms / states we have
     call projection_analyse_orbitals
 
-    ! parse the pdos string to see what we want
-    call projection_get_string
+    ! Decide whether want regular PDOS based on projectors or to write density of states for all suborbitals V Ravindran PROJECTION_DO_SUBORBS 23/10/2024
+    if (projection_do_suborbs) then
+      ! Get the suborbitals for a given string
+      call projection_get_suborbitals
+    else
+      ! parse the pdos string to see what we want
+      call projection_get_string
+    end if
 
     ! form the right matrix elements
     call projection_merge
