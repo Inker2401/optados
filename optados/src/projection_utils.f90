@@ -50,11 +50,12 @@ module od_projection_utils
   ! Suborbitals
   logical, public, save :: projection_do_suborbs = .false.
   integer, public, parameter :: max_suborbs = 16
-  character(len=9), parameter :: suborb_labels(max_suborbs) = ['S        ', &
-                                                               'Px       ', 'Py       ', 'Pz       ', &
-                                                               'Dzz      ', 'Dzy      ', 'Dzx      ', 'Dxx-yy   ', 'Dxy      ', &
-                                                               'Fxxx     ', 'Fyyy     ', 'Fzzz     ', 'Fxyz     ', &
-                                                               'Fz(xx-yy)', 'Fy(zz-xx)', 'Fx(yy-zz)']
+  character(len=9), public, parameter :: suborb_labels(max_suborbs) = ['S        ', &
+                                                                       'Px       ', 'Py       ', 'Pz       ', &
+                                                                       'Dzz      ', 'Dzy      ', 'Dzx      ', &
+                                                                       'Dxx-yy   ', 'Dxy      ', &
+                                                                       'Fxxx     ', 'Fyyy     ', 'Fzzz     ', 'Fxyz     ', &
+                                                                       'Fz(xx-yy)', 'Fy(zz-xx)', 'Fx(yy-zz)']
 
   integer, public, allocatable :: proj_suborb(:, :) ! suborbitals for (num_species, max_suborbs)
 
@@ -530,7 +531,7 @@ contains
     ! suborbital for each orbital from calculation
     integer, dimension(:), allocatable :: orbital_lm
 
-    integer :: am_indx, end_indx
+    integer :: am_indx, start_indx, end_indx
     integer :: loop_s, loop_orb, loop_p, loop_m
     integer :: ns, nk, nb
     integer :: ierr
@@ -547,14 +548,15 @@ contains
 
     proj_suborb = 0; loop_orb = 1
     do
-      am_indx = suborb_indx(pdos_orbital%am_channel(loop_orb) + 1)
-      end_indx = am_indx + nsuborbs(am_indx) - 1
+      am_indx = pdos_orbital%am_channel(loop_orb) + 1
+      start_indx = suborb_indx(am_indx)
+      end_indx = start_indx + nsuborbs(am_indx) - 1
 
       ! Determine the suborbital projectors that we have in this system
-      proj_suborb(pdos_orbital%species_no(loop_orb), am_indx:end_indx) = 1
+      proj_suborb(pdos_orbital%species_no(loop_orb), start_indx:end_indx) = 1
 
       ! Might as well figure out which suborbital corresponds to this orbital
-      orbital_lm(loop_orb:loop_orb + nsuborbs(am_indx) - 1) = (/(loop_m, loop_m=am_indx, end_indx, 1)/)
+      orbital_lm(loop_orb:loop_orb + nsuborbs(am_indx) - 1) = (/(loop_m, loop_m=start_indx, end_indx, 1)/)
 
       ! Advanced orbitals loop by number of suborbitals for given angular momentum l
       loop_orb = loop_orb + nsuborbs(am_indx)
@@ -594,7 +596,7 @@ contains
           do loop_p = 1, num_proj
             do loop_orb = 1, pdos_mwab%norbitals
               if (projection_array(pdos_orbital%species_no(loop_orb), pdos_orbital%rank_in_species(loop_orb), &
-                                   pdos_orbital%am_channel(loop_orb) + 1, loop_p) == 1) then
+                                   orbital_lm(loop_orb), loop_p) == 1) then
                 matrix_weights(loop_p, nb, nk, ns) = matrix_weights(loop_p, nb, nk, ns) + &
                                                      pdos_weights(loop_orb, nb, nk, ns)
               end if
