@@ -82,15 +82,15 @@ contains
 
     ! Decide whether want regular PDOS based on projectors or to write density of states for all suborbitals V Ravindran PROJECTION_DO_SUBORBS 23/10/2024
     if (projection_do_suborbs) then
-      ! Get the suborbitals for a given string
+      ! Figure out what suborbitals we have and then obtain the appropriate matrix elements for each suborbital
       call projection_get_suborbitals
     else
       ! parse the pdos string to see what we want
       call projection_get_string
-    end if
 
-    ! form the right matrix elements
-    call projection_merge
+      ! form the right matrix elements
+      call projection_merge
+    end if
 
     if (on_root .and. (iprint > 2)) then
       call pdos_report_projectors
@@ -102,7 +102,11 @@ contains
     ! and write everything out
     if (set_efermi_zero .and. .not. efermi_set) call dos_utils_set_efermi
     if (on_root) then
-      call pdos_write
+      if (projection_do_suborbs) then
+        call pdos_write_suborbs
+      else
+        call pdos_write
+      end if
     end if
 
   end subroutine pdos_calculate
@@ -297,6 +301,120 @@ contains
       write (stdout, '(1x,a)') '+----------------------------------------------------------------------------+'
     end do
   end subroutine pdos_report_projectors
+
+  subroutine pdos_write_suborbs
+    ! TODO Documentation - could probably actually merge this with pdos_write
+    use od_io, only: seedname, stdout, io_file_unit, io_error, io_date
+    use od_cell, only: atoms_species_num, num_species
+    use od_dos_utils, only: E
+    use od_electronic, only: pdos_mwab, efermi, efermi_set
+    use od_parameters, only: dos_nbins, set_efermi_zero, iprint
+    use od_projection_utils, only: max_suborbs, suborb_labels
+
+    implicit none
+
+    character(len=25) :: start_iproj_name, end_iproj_name
+    integer :: start_proj, stop_proj
+    integer :: start_iproj, end_iproj
+    character(len=512) :: name
+    integer :: psub_file
+    real(kind=dp), allocatable :: E_shift(:)
+
+    character(len=20) :: string
+    character(len=11) :: cdate
+    character(len=9) :: ctime
+
+    integer :: iproj, isuborb, ispecies_num, ispecies, ispin
+    integer :: idos, ierr
+
+    ! TODO Allow selected projectors to be written at some point
+    start_proj = 1; stop_proj = num_proj
+
+    name = trim(seedname)//'.pdos.dat'
+
+    ! Set energy scale
+    allocate (E_shift(dos_nbins), stat=ierr)
+    if (ierr /= 0) call io_error('Error: pdos_write_suborbs - Failed to allocate E_shift')
+    if (set_efermi_zero) then
+      E_shift = E - E - efermi
+    else
+      E_shift = E
+    end if
+
+    ! Open the file and write the header
+    psub_file = io_file_unit()
+    open (unit=psub_file, file=trim(name), action='WRITE', status='REPLACE', iostat=ierr)
+    if (ierr /= 0) call io_error('Error: pdos_write_suborbs - Failed to open output file for PDOS')
+    if (iprint > 2) write (stdout, '(1x,a36,a30,11x,a1)') "| Writing suborbital projectors to: ", trim(name), "|"
+
+    write (psub_file, *) "##############################################################################"
+    write (psub_file, *) "#"
+    write (psub_file, *) "#                  O p t a D O S   o u t p u t   f i l e "
+    write (psub_file, '(1x,a1)') "#"
+    call io_date(cdate, ctime)
+    write (psub_file, *) '#  Generated on ', cdate, ' at ', ctime
+    write (psub_file, '(1x,a78)') "##############################################################################"
+    write (psub_file, '(1a,a)') '#', '+----------------------------------------------------------------------------+'
+    write (psub_file, '(1a,a)') '#', '|                    Partial Density of States -- Suborbitals                |'
+    write (psub_file, '(1a,a)') '#', '+----------------------------------------------------------------------------+'
+
+    ! Loop over spins and write out contents of each projector
+    do ispin = 1, pdos_mwab%nspins
+      do iproj = start_proj, stop_proj
+        write (psub_file, '(1a,a1,a12,i4,a10,50x,a1)') '#', '|', ' Column: ', iproj, ' contains:', '|'
+        if (pdos_mwab%nspins > 1) then
+          write (psub_file, '(1a,a1,a16,11x,a12,6x,a15,16x,a1)') '#', '|', ' Atom ', ' Suborbital ', ' Spin Channel ', '|'
+        else
+          write (psub_file, '(1a,a1,a16,11x,a12,6x,31x,a1)') '#', '|', ' Atom ', ' Suborbital ', '|'
+        end if
+
+        ! Loop over all everything in projection_array
+        do ispecies = 1, num_species
+          do ispecies_num = 1, atoms_species_num(ispecies)
+            do isuborb = 1, max_suborbs
+              if (projection_array(ispecies, ispecies_num, isuborb, iproj) == 1) then
+                if (pdos_mwab%nspins > 1) then
+                  if (ispin == 1) then
+                    write (psub_file, '(1a,a1,a13,i3,8x,a18,8x,a4,24x,1a)') "#", "|", proj_symbol(ispecies), &
+                      ispecies_num, suborb_labels(isuborb), 'Up', '|'
+                  else
+                    write (psub_file, '(1a,a1,a13,i3,8x,a18,7x,a4,23x,1a)') "#", "|", proj_symbol(ispecies), &
+                      ispecies_num, suborb_labels(isuborb), 'Down', '|'
+                  end if
+                else
+                  write (psub_file, '(1a,a1,a13,i3,8x,a18,34x,1a)') "#", "|", proj_symbol(ispecies), &
+                    ispecies_num, suborb_labels(isuborb), '|'
+                end if
+              end if ! have projection?
+            end do ! isuborb
+          end do ! ispecies_num
+        end do ! ispecies
+      end do ! iproj
+      write (psub_file, '(1a,a)') '#', '+----------------------------------------------------------------------------+'
+    end do ! ispin
+
+    ! Finished writing the header, now write the density of states
+    write (string, '(I4,"(1x,es14.7)")') (stop_proj - start_proj) + 1
+    if (pdos_mwab%nspins > 1) then
+      ! Flip spin down density of states for plot
+      dos_partial(:, 2, :) = -dos_partial(:, 2, :)
+      do idos = 1, dos_nbins
+        write (psub_file, '(es14.7,'//trim(string)//trim(string)//')') E_shift(idos), &
+          (dos_partial(idos, 1, iproj), iproj=start_proj, stop_proj), &
+          (dos_partial(idos, 2, iproj), iproj=start_proj, stop_proj)
+      end do
+    else
+      do idos = 1, dos_nbins
+        write (psub_file, '(es14.7,'//trim(string)//')') E_shift(idos), &
+          (dos_partial(idos, 1, iproj), iproj=start_proj, stop_proj)
+      end do
+    end if
+
+    close (psub_file)
+
+    deallocate (E_shift, stat=ierr)
+    if (ierr /= 0) call io_error('Error: pdos_write_suborbs - Failed to deallocate E_shift')
+  end subroutine pdos_write_suborbs
 
 !!$!===============================================================================
 !!$ subroutine count_atoms(orbital,num_orbitals,num_atoms)
