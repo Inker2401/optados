@@ -361,9 +361,9 @@ contains
     ! Loop over spins and write out contents of each projector
     do ispin = 1, pdos_mwab%nspins
       do iproj = start_proj, stop_proj
-        write (psub_file, '(1a,a1,a12,i4,a10,50x,a1)') '#', '|', ' Column: ', iproj, ' contains:', '|'
+        write (psub_file, '(1a,a1,a12,i4,a10,50x,a1)') '#', '|', ' Column: ', iproj + (ispin - 1)*num_proj, ' contains:', '|'
         if (pdos_mwab%nspins > 1) then
-          write (psub_file, '(1a,a1,a16,11x,a12,6x,a15,16x,a1)') '#', '|', ' Atom ', ' Suborbital ', ' Spin Channel ', '|'
+          write (psub_file, '(1a,a1,a16,11x,a12,6x,a14,17x,a1)') '#', '|', ' Atom ', ' Suborbital ', ' Spin Channel ', '|'
         else
           write (psub_file, '(1a,a1,a16,11x,a12,6x,31x,a1)') '#', '|', ' Atom ', ' Suborbital ', '|'
         end if
@@ -375,7 +375,7 @@ contains
               if (projection_array(ispecies, ispecies_num, isuborb, iproj) == 1) then
                 if (pdos_mwab%nspins > 1) then
                   if (ispin == 1) then
-                    write (psub_file, '(1a,a1,a13,i3,8x,a18,8x,a4,24x,1a)') "#", "|", proj_symbol(ispecies), &
+                    write (psub_file, '(1a,a1,a13,i3,8x,a18,8x,a2,24x,1a)') "#", "|", proj_symbol(ispecies), &
                       ispecies_num, suborb_labels(isuborb), 'Up', '|'
                   else
                     write (psub_file, '(1a,a1,a13,i3,8x,a18,7x,a4,23x,1a)') "#", "|", proj_symbol(ispecies), &
